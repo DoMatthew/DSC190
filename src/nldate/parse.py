@@ -328,8 +328,8 @@ def parse(s: str, today: date | None = None) -> date:
 
     # ── compound offset with reference ───────────────────────────────────────
 
-    # "<n1> <u1> and <n2> <u2> before/after <ref>"
-    m = re.fullmatch(r"(\w+) (\w+) and (\w+) (\w+) (before|after) (.+)", norm)
+    # "<n1> <u1> and/","<n2> <u2> before/after <ref>"
+    m = re.fullmatch(r"(\w+) (\w+)(?:,\s*| and )(\w+) (\w+) (before|after) (.+)", norm)
     if m:
         unit1 = _UNITS.get(m.group(2))
         unit2 = _UNITS.get(m.group(4))
