@@ -109,9 +109,9 @@ def _shift(d: date, n: int, unit: str) -> date:
 
 
 def _parse_absolute(s: str) -> date | None:
-    m = re.fullmatch(r"(\w+)\s+(\d+)(?:st|nd|rd|th)?,?\s*(\d{4})", s)
+    m = re.fullmatch(r"(\w+\.?)\s+(\d+)(?:st|nd|rd|th)?,?\s*(\d{4})", s)
     if m:
-        mon = _MONTHS.get(m.group(1))
+        mon = _MONTHS.get(m.group(1).rstrip("."))
         if mon is not None:
             try:
                 return date(int(m.group(3)), mon, int(m.group(2)))
