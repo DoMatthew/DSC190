@@ -108,21 +108,34 @@ def _shift(d: date, n: int, unit: str) -> date:
     return _add_months(d, n * 12)
 
 
-def _parse_absolute(s: str) -> date | None:
-    m = re.fullmatch(r"(\w+\.?)\s+(\d+)(?:st|nd|rd|th)?,?\s*(\d{4})", s)
-    if m:
-        mon = _MONTHS.get(m.group(1).rstrip("."))
-        if mon is not None:
-            try:
-                return date(int(m.group(3)), mon, int(m.group(2)))
-            except ValueError:
-                pass
-    m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", s)
+def _nearest(today: date, month: int, day: int) -> date:
+    """Return the nearest (month, day) that is on or after today."""
+    for year in (today.year, today.year + 1, today.year + 4):
+        try:
+            candidate = date(year, month, day)
+            if candidate >= today:
+                return candidate
+        except ValueError:
+            continue
+    raise ValueError(f"No valid date found for month={month}, day={day}")
+
+
+def _month(token: str) -> int | None:
+    """Look up a month number from a name or abbreviation (with optional dot)."""
+    return _MONTHS.get(token.rstrip("."))
+
+
+def _parse_absolute(s: str, today: date) -> date | None:
+    # ── numeric formats ──────────────────────────────────────────────────────
+
+    # YYYY-MM-DD  (ISO 8601)
+    m = re.fullmatch(r"(\d{4})-(\d{1,2})-(\d{1,2})", s)
     if m:
         try:
             return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         except ValueError:
             pass
+
     # YYYY/MM/DD
     m = re.fullmatch(r"(\d{4})/(\d{1,2})/(\d{1,2})", s)
     if m:
@@ -130,13 +143,80 @@ def _parse_absolute(s: str) -> date | None:
             return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         except ValueError:
             pass
-    # MM/DD/YYYY
+
+    # MM/DD/YYYY  (US slash)
     m = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", s)
     if m:
         try:
             return date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
         except ValueError:
             pass
+
+    # MM-DD-YYYY  (US dash)
+    m = re.fullmatch(r"(\d{1,2})-(\d{1,2})-(\d{4})", s)
+    if m:
+        try:
+            return date(int(m.group(3)), int(m.group(1)), int(m.group(2)))
+        except ValueError:
+            pass
+
+    # ── named-month formats with year ────────────────────────────────────────
+    # Shared ordinal/separator fragment reused in several patterns below.
+    # "Month DD[th][,] YYYY"  e.g. "December 1st, 2025", "Dec. 1 2025"
+    m = re.fullmatch(r"(\w+\.?)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s*(\d{4})", s)
+    if m:
+        mon = _month(m.group(1))
+        if mon is not None:
+            try:
+                return date(int(m.group(3)), mon, int(m.group(2)))
+            except ValueError:
+                pass
+
+    # "DD[th] [of] Month YYYY"  e.g. "1st December 2025", "1st of Dec. 2025"
+    m = re.fullmatch(r"(\d{1,2})(?:st|nd|rd|th)?(?:\s+of)?\s+(\w+\.?)\s+(\d{4})", s)
+    if m:
+        mon = _month(m.group(2))
+        if mon is not None:
+            try:
+                return date(int(m.group(3)), mon, int(m.group(1)))
+            except ValueError:
+                pass
+
+    # ── named-month formats without day ──────────────────────────────────────
+
+    # "Month YYYY"  e.g. "December 2025" → first of that month
+    m = re.fullmatch(r"(\w+\.?)\s+(\d{4})", s)
+    if m:
+        mon = _month(m.group(1))
+        if mon is not None:
+            try:
+                return date(int(m.group(2)), mon, 1)
+            except ValueError:
+                pass
+
+    # ── named-month formats without year ─────────────────────────────────────
+    # These return the nearest future occurrence relative to today.
+
+    # "Month DD[th]"  e.g. "December 25", "December 25th"
+    m = re.fullmatch(r"(\w+\.?)\s+(\d{1,2})(?:st|nd|rd|th)?", s)
+    if m:
+        mon = _month(m.group(1))
+        if mon is not None:
+            try:
+                return _nearest(today, mon, int(m.group(2)))
+            except ValueError:
+                pass
+
+    # "DD[th] [of] Month"  e.g. "25 December", "25th of December"
+    m = re.fullmatch(r"(\d{1,2})(?:st|nd|rd|th)?(?:\s+of)?\s+(\w+\.?)", s)
+    if m:
+        mon = _month(m.group(2))
+        if mon is not None:
+            try:
+                return _nearest(today, mon, int(m.group(1)))
+            except ValueError:
+                pass
+
     return None
 
 
@@ -152,7 +232,7 @@ def parse(s: str, today: date | None = None) -> date:
 
     norm = s.strip().lower()
 
-    # simple keywords
+    # ── simple keywords ───────────────────────────────────────────────────────
     if norm in ("today", "now"):
         return today
     if norm == "tomorrow":
@@ -164,7 +244,18 @@ def parse(s: str, today: date | None = None) -> date:
     if norm == "the day before yesterday":
         return today - timedelta(days=2)
 
-    # "next <token>"
+    # bare weekday  e.g. "tuesday"  → next occurrence (never today)
+    if norm in _WEEKDAYS:
+        ahead = (_WEEKDAYS[norm] - today.weekday()) % 7 or 7
+        return today + timedelta(days=ahead)
+
+    # "on <date>"  e.g. "on December 1st, 2025"
+    if norm.startswith("on "):
+        result = _parse_absolute(norm[3:], today)
+        if result is not None:
+            return result
+
+    # ── next / last ───────────────────────────────────────────────────────────
     m = re.fullmatch(r"next (\w+)", norm)
     if m:
         token = m.group(1)
@@ -179,7 +270,6 @@ def parse(s: str, today: date | None = None) -> date:
         if token == "year":
             return _add_months(today, 12)
 
-    # "last <token>"
     m = re.fullmatch(r"last (\w+)", norm)
     if m:
         token = m.group(1)
@@ -194,7 +284,7 @@ def parse(s: str, today: date | None = None) -> date:
         if token == "year":
             return _add_months(today, -12)
 
-    # "this <weekday>"  — nearest occurrence, including today (0–6 days ahead)
+    # "this <weekday>"  — nearest occurrence including today (0–6 days ahead)
     m = re.fullmatch(r"this (\w+)", norm)
     if m:
         wd = _WEEKDAYS.get(m.group(1))
@@ -202,7 +292,9 @@ def parse(s: str, today: date | None = None) -> date:
             ahead = (wd - today.weekday()) % 7
             return today + timedelta(days=ahead)
 
-    # "in <n> <unit1> and <n> <unit2>"  (compound — before simple "in")
+    # ── "in …" ────────────────────────────────────────────────────────────────
+
+    # "in <n> <unit1> and <n> <unit2>"
     m = re.fullmatch(r"in (\w+) (\w+) and (\w+) (\w+)", norm)
     if m:
         unit1 = _UNITS.get(m.group(2))
@@ -224,7 +316,7 @@ def parse(s: str, today: date | None = None) -> date:
             except ValueError:
                 pass
 
-    # "<n> <unit> ago"
+    # ── ago ───────────────────────────────────────────────────────────────────
     m = re.fullmatch(r"(\w+) (\w+) ago", norm)
     if m:
         unit = _UNITS.get(m.group(2))
@@ -234,7 +326,9 @@ def parse(s: str, today: date | None = None) -> date:
             except ValueError:
                 pass
 
-    # compound: "<n1> <unit1> and <n2> <unit2> before/after <ref>"
+    # ── compound offset with reference ───────────────────────────────────────
+
+    # "<n1> <u1> and <n2> <u2> before/after <ref>"
     m = re.fullmatch(r"(\w+) (\w+) and (\w+) (\w+) (before|after) (.+)", norm)
     if m:
         unit1 = _UNITS.get(m.group(2))
@@ -270,7 +364,8 @@ def parse(s: str, today: date | None = None) -> date:
             except ValueError:
                 pass
 
-    result = _parse_absolute(norm)
+    # ── absolute date (last resort) ───────────────────────────────────────────
+    result = _parse_absolute(norm, today)
     if result is not None:
         return result
 
