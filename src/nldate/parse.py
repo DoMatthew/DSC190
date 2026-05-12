@@ -62,6 +62,13 @@ _WORDS: dict[str, int] = {
     "eighteen": 18,
     "nineteen": 19,
     "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
 }
 
 _UNITS: dict[str, str] = {
@@ -123,7 +130,7 @@ def parse(s: str, today: date | None = None) -> date:
     """Parse a natural-language date string and return a datetime.date.
 
     The optional ``today`` parameter sets the reference date for relative
-    expressions such as "tomorrow" or "next Tuesday".  It defaults to the
+    expressions such as "tomorrow" or "next Tuesday". Defaults to the
     current date when omitted.
     """
     if today is None:
@@ -131,28 +138,67 @@ def parse(s: str, today: date | None = None) -> date:
 
     norm = s.strip().lower()
 
-    # Simple keywords
+    # simple keywords
     if norm in ("today", "now"):
         return today
     if norm == "tomorrow":
         return today + timedelta(days=1)
     if norm == "yesterday":
         return today - timedelta(days=1)
+    if norm == "the day after tomorrow":
+        return today + timedelta(days=2)
+    if norm == "the day before yesterday":
+        return today - timedelta(days=2)
 
-    # "next <weekday>" / "last <weekday>"
+    # "next <token>"
     m = re.fullmatch(r"next (\w+)", norm)
     if m:
-        wd = _WEEKDAYS.get(m.group(1))
+        token = m.group(1)
+        wd = _WEEKDAYS.get(token)
         if wd is not None:
             ahead = (wd - today.weekday()) % 7 or 7
             return today + timedelta(days=ahead)
+        if token == "week":
+            return today + timedelta(weeks=1)
+        if token == "month":
+            return _add_months(today, 1)
+        if token == "year":
+            return _add_months(today, 12)
 
+    # "last <token>"
     m = re.fullmatch(r"last (\w+)", norm)
     if m:
-        wd = _WEEKDAYS.get(m.group(1))
+        token = m.group(1)
+        wd = _WEEKDAYS.get(token)
         if wd is not None:
             behind = (today.weekday() - wd) % 7 or 7
             return today - timedelta(days=behind)
+        if token == "week":
+            return today - timedelta(weeks=1)
+        if token == "month":
+            return _add_months(today, -1)
+        if token == "year":
+            return _add_months(today, -12)
+
+    # "this <weekday>"  — nearest occurrence, including today (0–6 days ahead)
+    m = re.fullmatch(r"this (\w+)", norm)
+    if m:
+        wd = _WEEKDAYS.get(m.group(1))
+        if wd is not None:
+            ahead = (wd - today.weekday()) % 7
+            return today + timedelta(days=ahead)
+
+    # "in <n> <unit1> and <n> <unit2>"  (compound — before simple "in")
+    m = re.fullmatch(r"in (\w+) (\w+) and (\w+) (\w+)", norm)
+    if m:
+        unit1 = _UNITS.get(m.group(2))
+        unit2 = _UNITS.get(m.group(4))
+        if unit1 is not None and unit2 is not None:
+            try:
+                d = _shift(today, _num(m.group(1)), unit1)
+                return _shift(d, _num(m.group(3)), unit2)
+            except ValueError:
+                pass
 
     # "in <n> <unit>"
     m = re.fullmatch(r"in (\w+) (\w+)", norm)
